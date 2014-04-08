@@ -53,3 +53,9 @@ coverage.xml
 docs/_build/
 
 localenv/
+
+*.bloom
+*.data
+*.meta
+*.swp
+*.swo

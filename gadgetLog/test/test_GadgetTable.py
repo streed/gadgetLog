@@ -1,22 +1,22 @@
 import unittest
 
-from ..gadget import GadgetTable
+from ..gadget import GadgetMemoryTable
 
-class TestGadgetTable( unittest.TestCase ):
-  def test_Gadget_creates_memmap_correctly( self ):
-    m = GadgetTable( "test" )
+class TestGadgetMemoryTable( unittest.TestCase ):
+  def test_GadgetMemory_creates_memmap_correctly( self ):
+    m = GadgetMemoryTable( "test" )
 
-    self.assertTrue( m.store != None )
+    self.assertTrue( m.memory != None )
 
   def test_GagetTable_put( self ):
-    m = GadgetTable( "test" )
+    m = GadgetMemoryTable( "test" )
 
     m.put( "test", "test string" )
 
     self.assertTrue( "test" in m.gadgets )
 
-  def test_GadgetTable_get( self ):
-    m = GadgetTable( "test" )
+  def test_GadgetMemoryTable_get( self ):
+    m = GadgetMemoryTable( "test" )
 
     m.put( "test", "test string" )
 
