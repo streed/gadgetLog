@@ -1,4 +1,4 @@
-from gadgetLog.gadget import GadgetTableCollection
+from gadgetStore.gadget import GadgetTableCollection
 
 store = GadgetTableCollection( dataDir="/tmp/gadget", interval=60 )
 
