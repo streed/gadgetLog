@@ -25,12 +25,7 @@ class MemoryStore( object ):
     if( size >= self.size or ( offset + size ) >= self.size ):
       return None
     else:
-      old = self.memory.tell()
-      self.memory.seek( offset )
-      data = self.memory.read( size )
-      self.memory.seek( old )
-
-      return data
+      return self.memory[offset:offset + size]
 
   def close( self ):
     self.memory.close()
@@ -47,9 +42,12 @@ class MemoryStore( object ):
     return ret
 
 class GadgetBox( object ):
-  def __init__( self, name ):
+  def __init__( self, name, size ):
+    self.size = size
     self.name = name
     self.filter = ScalableBloomFilter( mode=ScalableBloomFilter.SMALL_SET_GROWTH )
+    self.handle = None
+    self.keys = None
 
   def persist( self, keys, memory ):
     self.filter.tofile( open( "%s.bloom" % self.name, "wb" ) )
@@ -65,29 +63,31 @@ class GadgetBox( object ):
     return self
 
   def get( self, key, size ):
-    mem = MemoryStore.fromfile( self.name, size=size )
-    ret = mem.get( key.offset, key.size )
-    mem.close()
+    if( self.handle == None ):
+      self.handle = MemoryStore.fromfile( self.name, size=self.size )
+    ret = self.handle.get( key.offset, key.size )
 
     return ret
 
   def loadGadgets( self ):
-    keys = pickle.load( open( "%s.meta" % self.name, "rb" ) )
-    keys = dict( keys )
+    if( self.keys == None ):
+      self.keys = pickle.load( open( "%s.meta" % self.name, "rb" ) )
+      self.keys = dict( self.keys )
 
-    return keys
+    return self.keys
       
 class GadgetBoxFactory( object ):
-  def __init__( self, name ):
+  def __init__( self, name, bufferSize=1024 ):
     self.boxes = []
     self.name = name
+    self.size = bufferSize
 
   def next( self ):
-    self.boxes.append( GadgetBox( "%s-%d" % ( self.name, len( self.boxes ) ) ) )
+    self.boxes.append( GadgetBox( "%s-%d" % ( self.name, len( self.boxes ) ), self.size ) )
     return self.boxes[-1] 
 
   @classmethod
-  def fromfiles( cls, name ):
+  def fromfiles( cls, name, bufferSize=1024 ):
     bloomFiles = glob.glob( "%s-*.bloom" % name )
     dataFiles = glob.glob( "%s-*.data" % name )
 
@@ -95,7 +95,7 @@ class GadgetBoxFactory( object ):
 
     for i in range( len( dataFiles ) ): 
       b, d = bloomFiles[i], dataFiles[i]
-      box = GadgetBox( b.split( "." )[0] )
+      box = GadgetBox( b.split( "." )[0], bufferSize )
       box.filter = ScalableBloomFilter.fromfile( open( b, "rb" ) )
 
       factory.boxes.append( box )
@@ -108,7 +108,7 @@ class GadgetMemoryTable( object ):
     self.bufferSize = bufferSize
     self.memory = MemoryStore( name, size=bufferSize )
     self.gadgets = {}
-    self.boxes = GadgetBoxFactory( name )
+    self.boxes = GadgetBoxFactory( name, bufferSize=bufferSize )
     self.currentBox = self.boxes.next()
 
   def put( self, key, data ):
@@ -150,10 +150,10 @@ class GadgetMemoryTable( object ):
   @classmethod
   def fromfiles( cls, name, bufferSize=1024 ):
     self = cls( name, bufferSize=bufferSize )
-    self.boxes = GadgetBoxFactory.fromfiles( name )
+    self.boxes = GadgetBoxFactory.fromfiles( name, bufferSize=bufferSize )
     self.currentBox = self.boxes.boxes[-1]
     self.gadgets = self.currentBox.loadGadgets()
-    self.memory = MemoryStore.fromfile( self.currentBox.name, size=1024 )
+    self.memory = MemoryStore.fromfile( self.currentBox.name, size=bufferSize )
     return self
 
   def _flush( self ):
