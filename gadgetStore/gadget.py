@@ -142,6 +142,7 @@ class GadgetTable( object ):
 
   def put( self, key, data ):
     offset = self.currentBox.put( data )
+
     if( offset < 0 ):
       self.persist()
       self.currentBox.close()
@@ -149,7 +150,6 @@ class GadgetTable( object ):
       offset = self.currentBox.put( data )
 
     self.currentBox.filter.add( key )
-
     self.currentBox.putGadget( key, Gadget( offset, len( data ) ) )
     
   def get( self, key ):
@@ -202,19 +202,6 @@ class GadgetTableCollection( object ):
 
     self.tables = {}
 
-    #class GadgetPersistThread( threading.Thread ):
-    #  def __init__( self, collection ):
-    #    super( GadgetPersistThread, self ).__init__()
-    #    self.collection = collection
-    #    self.daemon = True
-    #
-    #  def run( self ):
-    #    self.collection._persist()
-    #    self.collection.close()
-    #
-    #self.persistThread = GadgetPersistThread( self )
-    #self.persistThread.start()
-
   def create( self, name, size ):
     try:
       table = GadgetTable.fromfiles( name, bufferSize=size, dataDir=self.dataDir )
@@ -233,18 +220,6 @@ class GadgetTableCollection( object ):
     self.tables[table].persist()
 
   def close( self ):
-    #self._running.set()
-
     for table in self.tables.values():
       table.close()
-
-  def _persist( self ):
-    while not self._running.is_set():
-      time.sleep( self.interval )
-      self._persistEvent.set()
- 
-      for table in self.tables.values():
-        table.persist()
-
-      self._persistEvent.clear()
 
