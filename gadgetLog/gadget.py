@@ -1,6 +1,8 @@
 import os
+import time
 import pickle
 import glob
+import threading
 from mmap import mmap
 from collections import namedtuple
 from pybloom import ScalableBloomFilter
@@ -74,8 +76,11 @@ class GadgetBox( object ):
 
   def loadGadgets( self ):
     if( self.keys == None ):
-      self.keys = pickle.load( open( os.path.join( self.dataDir, "%s.meta" % self.name ), "rb" ) )
-      self.keys = dict( self.keys )
+      try:
+        self.keys = pickle.load( open( os.path.join( self.dataDir, "%s.meta" % self.name ), "rb" ) )
+        self.keys = dict( self.keys )
+      except IOError:
+        self.keys = {}
 
     return self.keys
       
@@ -134,10 +139,10 @@ class GadgetTable( object ):
     self.gadgets[key] = Gadget( offset, len( data ) )
     
   def get( self, key ):
-    if( not key in self.currentBox.loadGadgets() ):
+    if( not key in self.currentBox.loadGadgets() and key not in self.gadgets):
       return self._find_in_boxes( key )
     else:
-      g = self.currentBox.loadGadgets()[key]
+      g = self.gadgets[key]
       data = self.memory.get( g.offset, g.size )
       return data
 
@@ -173,8 +178,23 @@ class GadgetTableCollection( object ):
   def __init__( self, dataDir="", interval=120 ):
     self.dataDir = dataDir
     self.interval = interval
+    self._running = threading.Event()
+    self._persistEvent = threading.Event()
 
     self.tables = {}
+
+    class GadgetPersistThread( threading.Thread ):
+      def __init__( self, collection ):
+        super( GadgetPersistThread, self ).__init__()
+        self.collection = collection
+        self.daemon = True
+
+      def run( self ):
+        self.collection._persist()
+        self.collection.close()
+
+    self.persistThread = GadgetPersistThread( self )
+    self.persistThread.start()
 
   def create( self, name, size ):
     try:
@@ -192,4 +212,20 @@ class GadgetTableCollection( object ):
 
   def persist( self, table ):
     self.tables[table].persist()
+
+  def close( self ):
+    self._running.set()
+
+    for table in self.tables.values():
+      table.persist()
+
+  def _persist( self ):
+    while not self._running.is_set():
+      time.sleep( self.interval )
+      self._persistEvent.set()
+ 
+      for table in self.tables.values():
+        table.persist()
+
+      self._persistEvent.clear()
 
