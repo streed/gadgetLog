@@ -1,10 +1,10 @@
-import os
-import time
-import pickle
 import glob
+import os
+import pickle
 import threading
-from mmap import mmap
+import time
 from collections import namedtuple
+from mmap import mmap
 from pybloom import ScalableBloomFilter
 
 Gadget = namedtuple( "Gadget", [ "offset", "size" ] )
@@ -48,11 +48,11 @@ class MemoryStore( object ):
 class GadgetBox( object ):
   def __init__( self, name, size, dataDir="" ):
     self.dataDir = dataDir
-    self.size = size
-    self.name = name
     self.filter = ScalableBloomFilter( mode=ScalableBloomFilter.SMALL_SET_GROWTH )
     self.handle = None
     self.keys = None
+    self.name = name
+    self.size = size
 
   def persist( self, keys, memory ):
     self.filter.tofile( open( os.path.join( self.dataDir, "%s.bloom" % self.name ), "wb" ) )
@@ -87,9 +87,9 @@ class GadgetBox( object ):
 class GadgetBoxFactory( object ):
   def __init__( self, name, bufferSize=1024, dataDir="" ):
     self.boxes = []
+    self.dataDir = dataDir
     self.name = name
     self.size = bufferSize
-    self.dataDir = dataDir
 
   def next( self ):
     self.boxes.append( GadgetBox( "%s-%d" % ( self.name, len( self.boxes ) ), self.size, dataDir=self.dataDir ) )
@@ -116,13 +116,13 @@ class GadgetBoxFactory( object ):
 
 class GadgetTable( object ):
   def __init__( self, name, bufferSize=1024, dataDir="" ):
-    self.dataDir = dataDir
-    self.name = name
-    self.bufferSize = bufferSize
-    self.memory = MemoryStore( name, size=bufferSize )
-    self.gadgets = {}
     self.boxes = GadgetBoxFactory( name, bufferSize=bufferSize )
+    self.bufferSize = bufferSize
     self.currentBox = self.boxes.next()
+    self.dataDir = dataDir
+    self.gadgets = {}
+    self.memory = MemoryStore( name, size=bufferSize )
+    self.name = name
 
   def put( self, key, data ):
     offset = self.memory.put( data )
@@ -176,10 +176,10 @@ class GadgetTable( object ):
  
 class GadgetTableCollection( object ):
   def __init__( self, dataDir="", interval=120 ):
+    self._persistEvent = threading.Event()
+    self._running = threading.Event()
     self.dataDir = dataDir
     self.interval = interval
-    self._running = threading.Event()
-    self._persistEvent = threading.Event()
 
     self.tables = {}
 
