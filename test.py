@@ -1,15 +1,16 @@
 from gadgetStore.gadget import GadgetTableCollection
+import random
 
-store = GadgetTableCollection( dataDir="/tmp/gadget", interval=60 )
+store = GadgetTableCollection( dataDir="/tmp/gadget", interval=120 )
 
-store.create( "test", 128 )
-store.put( "test", "testing", "Testing this" )
-#store.put( "test", "test", "Test" )
-print store.get( "test", "testing" )
-store.put( "test", "test2", "This is a test" )
-print store.get( "test", "test2" )
+store.create( "test", 1024 * 100 )
 
-store.persist( "test" )
-import time
-time.sleep( 65 )
+for i in range( 100000 ):
+  store.put( "test", "%d" % i, "%d" % i )
+
+
+#for i in [random.randint(0, 100000) for r in xrange(100)]:
+#  v = store.get( "test", "%d" % i )
+#  print i, v
+print store.get( "test", "55123" )
 store.close()

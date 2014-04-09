@@ -13,8 +13,14 @@ class MemoryStore( object ):
   def __init__( self, name, size=1024, dataDir="" ):
     self.dataDir = dataDir
     self.size = size
+    self.f = None
     if( size != None ):
-      self.memory = mmap( -1, size )
+      self.f = open( os.path.join( dataDir, "%s.data" % name ), "w+b" )
+      f = self.f
+      f.seek( size - 1 )
+      f.write( "\0" )
+      f.flush()
+      self.memory = mmap( f.fileno(), size )
     else:
       self.memory = None
 
@@ -33,14 +39,14 @@ class MemoryStore( object ):
 
   def close( self ):
     self.memory.close()
+    if( not self.f == None ):
+      self.f.close()
 
   @classmethod
   def fromfile( cls, name, size=1024, dataDir="" ):
     ret = cls( name, size=None, dataDir=dataDir )
     f = open( os.path.join( dataDir, "%s.data" % name ), "r+b" )
-    data = f.read( size )
-    ret.memory = mmap( -1, size )
-    ret.memory.write( data )
+    ret.memory = mmap( f.fileno(), size )
     ret.size = size
 
     return ret
@@ -49,36 +55,47 @@ class GadgetBox( object ):
   def __init__( self, name, size, dataDir="" ):
     self.dataDir = dataDir
     self.filter = ScalableBloomFilter( mode=ScalableBloomFilter.SMALL_SET_GROWTH )
-    self.handle = None
+    self.memory = None
     self.keys = None
     self.name = name
     self.size = size
+    self.loadGadgets()
 
   def persist( self, keys, memory ):
-    self.filter.tofile( open( os.path.join( self.dataDir, "%s.bloom" % self.name ), "wb" ) )
-    keys2 = []
-    with open( os.path.join( self.dataDir, "%s.data" % self.name ), "wb" ) as f:
-      for k in keys:
-        f.write( memory.get( k[1].offset, k[1].size ) )
-        newOffset = f.tell()
-        keys2.append( ( k[0], Gadget( newOffset - k[1].size, k[1].size ) ) )
+    with open( os.path.join( self.dataDir, "%s.bloom" % self.name ), "wb" ) as f:
+      self.filter.tofile( f )
 
-    pickle.dump( keys2, open( os.path.join( self.dataDir, "%s.meta" % self.name ), "wb" ) )
+    with open( os.path.join( self.dataDir, "%s.meta" % self.name ), "wb" ) as f:
+      pickle.dump( keys, f )
 
     return self
 
-  def get( self, key, size ):
-    if( self.handle == None ):
-      self.handle = MemoryStore.fromfile( self.name, size=self.size, dataDir=self.dataDir )
-    ret = self.handle.get( key.offset, key.size )
+  def get( self, key ):
+    if( self.memory == None ):
+      self.memory = MemoryStore.fromfile( self.name, size=self.size, dataDir=self.dataDir )
+    ret = self.memory.get( key.offset, key.size )
 
     return ret
+
+  def putGadget( self, key, gadget ):
+    self.keys[key] = gadget
+
+  def put( self, data ):
+    if( self.memory == None ):
+      self.memory = MemoryStore( self.name, size=self.size, dataDir=self.dataDir )
+    return self.memory.put( data )
+
+  def close( self ):
+    if( self.memory != None ):
+      self.memory.close()
+    self.memory = None
 
   def loadGadgets( self ):
     if( self.keys == None ):
       try:
-        self.keys = pickle.load( open( os.path.join( self.dataDir, "%s.meta" % self.name ), "rb" ) )
-        self.keys = dict( self.keys )
+        with open( os.path.join( self.dataDir, "%s.meta" % self.name ), "rb" ) as f:
+          self.keys = pickle.load( f )
+          self.keys = dict( self.keys )
       except IOError:
         self.keys = {}
 
@@ -108,7 +125,8 @@ class GadgetBoxFactory( object ):
     for i in range( len( dataFiles ) ): 
       b, d = bloomFiles[i], dataFiles[i]
       box = GadgetBox( b.split( "." )[0].split( os.sep )[-1], bufferSize, dataDir=dataDir )
-      box.filter = ScalableBloomFilter.fromfile( open( os.path.join( dataDir, b ), "rb" ) )
+      with open( os.path.join( dataDir, b ), "rb" ) as f:
+        box.filter = ScalableBloomFilter.fromfile( f )
 
       factory.boxes.append( box )
 
@@ -120,30 +138,26 @@ class GadgetTable( object ):
     self.bufferSize = bufferSize
     self.currentBox = self.boxes.next()
     self.dataDir = dataDir
-    self.gadgets = {}
-    self.memory = MemoryStore( name, size=bufferSize )
     self.name = name
 
   def put( self, key, data ):
-    offset = self.memory.put( data )
+    offset = self.currentBox.put( data )
     if( offset < 0 ):
       self.persist()
-      self.memory.close()
-      self.memory = MemoryStore( self.name, size=self.bufferSize )
-      self.gadgets = {}
-      offset = self.memory.put( data )
+      self.currentBox.close()
       self.currentBox = self.boxes.next()
-    else:
-      self.currentBox.filter.add( key )
+      offset = self.currentBox.put( data )
 
-    self.gadgets[key] = Gadget( offset, len( data ) )
+    self.currentBox.filter.add( key )
+
+    self.currentBox.putGadget( key, Gadget( offset, len( data ) ) )
     
   def get( self, key ):
-    if( not key in self.currentBox.loadGadgets() and key not in self.gadgets):
+    if( not key in self.currentBox.loadGadgets() ):
       return self._find_in_boxes( key )
     else:
-      g = self.gadgets[key]
-      data = self.memory.get( g.offset, g.size )
+      g = self.currentBox.loadGadgets()[key]
+      data = self.currentBox.get( g )
       return data
 
   def _find_in_boxes( self, key ):
@@ -152,13 +166,19 @@ class GadgetTable( object ):
       if( key in b.filter ):
         keys = b.loadGadgets() 
         if( key in keys ):
-          ret = b.get( keys[key], self.bufferSize )
+          ret = b.get( keys[key] )
+          b.close()
           break
+        b.close()
 
     return ret
 
   def persist( self ):
     self._flush()
+
+  def close( self ):
+    self.persist()
+    self.currentBox.close()
 
   @classmethod
   def fromfiles( cls, name, bufferSize=1024, dataDir="" ):
@@ -166,13 +186,12 @@ class GadgetTable( object ):
     self.boxes = GadgetBoxFactory.fromfiles( name, bufferSize=bufferSize, dataDir=dataDir )
     self.currentBox = self.boxes.boxes[-1]
     self.gadgets = self.currentBox.loadGadgets()
-    self.memory = MemoryStore.fromfile( self.currentBox.name, size=bufferSize, dataDir=dataDir )
+    self.memory = self.currentBox.memory
     return self
 
   def _flush( self ):
-    keys = self.gadgets.keys()
-    keys.sort()
-    self.currentBox.persist( [ ( key, self.gadgets[key] ) for key in keys ], self.memory )
+    keys = self.currentBox.loadGadgets()
+    self.currentBox.persist( [ ( key, self.currentBox.loadGadgets()[key] ) for key in keys ], self.currentBox.memory )
  
 class GadgetTableCollection( object ):
   def __init__( self, dataDir="", interval=120 ):
@@ -183,18 +202,18 @@ class GadgetTableCollection( object ):
 
     self.tables = {}
 
-    class GadgetPersistThread( threading.Thread ):
-      def __init__( self, collection ):
-        super( GadgetPersistThread, self ).__init__()
-        self.collection = collection
-        self.daemon = True
-
-      def run( self ):
-        self.collection._persist()
-        self.collection.close()
-
-    self.persistThread = GadgetPersistThread( self )
-    self.persistThread.start()
+    #class GadgetPersistThread( threading.Thread ):
+    #  def __init__( self, collection ):
+    #    super( GadgetPersistThread, self ).__init__()
+    #    self.collection = collection
+    #    self.daemon = True
+    #
+    #  def run( self ):
+    #    self.collection._persist()
+    #    self.collection.close()
+    #
+    #self.persistThread = GadgetPersistThread( self )
+    #self.persistThread.start()
 
   def create( self, name, size ):
     try:
@@ -214,10 +233,10 @@ class GadgetTableCollection( object ):
     self.tables[table].persist()
 
   def close( self ):
-    self._running.set()
+    #self._running.set()
 
     for table in self.tables.values():
-      table.persist()
+      table.close()
 
   def _persist( self ):
     while not self._running.is_set():
