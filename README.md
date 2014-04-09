@@ -1,4 +1,4 @@
-gadgetLog
+gadgetStore
 =========
 
 Simple Log Based Database
