@@ -1,7 +1,7 @@
 gadgetStore
 =========
 
-Simple Log Based Database
+Basic SSTable like key value store.
 
 The system uses two stores. The first of which is a in memory block of memory a long with a dictionary. The block of memory is of variable size and stays constant. The dictionary
 holds the offsets and sizes of values inside of this memory. Data is also stored inside of a bloom filter for quicker lookups. 
