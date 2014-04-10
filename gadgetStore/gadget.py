@@ -7,7 +7,9 @@ from collections import namedtuple
 from mmap import mmap
 from pybloom import ScalableBloomFilter
 
-Gadget = namedtuple( "Gadget", [ "offset", "size" ] )
+from .bufs.keys import pb_pb2
+
+Gadget = pb_pb2.Gadget
 
 class MemoryStore( object ):
   def __init__( self, name, size=1024, dataDir="" ):
@@ -66,7 +68,15 @@ class GadgetBox( object ):
       self.filter.tofile( f )
 
     with open( os.path.join( self.dataDir, "%s.meta" % self.name ), "wb" ) as f:
-      pickle.dump( keys, f )
+      keyList = pb_pb2.KeyList()  
+      
+      for k in keys:
+        kk = pb_pb2.Key()
+        kk.key = k[0]
+        kk.gadget.CopyFrom( k[1] )
+        keyList.keys.add().CopyFrom( kk )
+
+      f.write( keyList.SerializeToString() )
 
     return self
 
@@ -94,8 +104,11 @@ class GadgetBox( object ):
     if( self.keys == None ):
       try:
         with open( os.path.join( self.dataDir, "%s.meta" % self.name ), "rb" ) as f:
-          self.keys = pickle.load( f )
-          self.keys = dict( self.keys )
+          d = f.read()
+          keyList = pb_pb2.KeyList.FromString( d )
+          self.keys = {}
+          for key in keyList.keys:
+            self.keys[key.key] = key.gadget
       except IOError:
         self.keys = {}
 
@@ -150,7 +163,10 @@ class GadgetTable( object ):
       offset = self.currentBox.put( data )
 
     self.currentBox.filter.add( key )
-    self.currentBox.putGadget( key, Gadget( offset, len( data ) ) )
+    g = Gadget()
+    g.offset = offset
+    g.size = len( data )
+    self.currentBox.putGadget( key, g )
     
   def get( self, key ):
     if( not key in self.currentBox.loadGadgets() ):
@@ -159,6 +175,12 @@ class GadgetTable( object ):
       g = self.currentBox.loadGadgets()[key]
       data = self.currentBox.get( g )
       return data
+
+  def delete( self, key ):
+    g = Gadget()
+    g.offset = -1
+    g.size = -1
+    self.currentBox.putGadget( g )
 
   def _find_in_boxes( self, key ):
     ret = None
@@ -172,6 +194,17 @@ class GadgetTable( object ):
         b.close()
 
     return ret
+
+  def _find_box( self, key ):
+    box = None
+    for b in self.boxes.boxes:
+      if( key in b.filter ):
+        keys = b.loadGadgets()
+        if( key in keys ):
+          box = b
+          break
+        b.close()
+    return box 
 
   def persist( self ):
     self._flush()
@@ -211,10 +244,13 @@ class GadgetTableCollection( object ):
       self.tables[name] = GadgetTable( os.path.join( self.dataDir, name ), bufferSize=size, dataDir=self.dataDir )
 
   def put( self, table, key, value ):
-    self.tables[table].put( key, value )
+    self.tables[table].put( str( key ), str( value ) )
 
   def get( self, table, key ):
     return self.tables[table].get( key )
+
+  def delete( self, table, key ):
+    self.tables[table].delete( key )
 
   def persist( self, table ):
     self.tables[table].persist()
