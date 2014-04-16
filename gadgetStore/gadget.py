@@ -243,6 +243,8 @@ class GadgetTableCollection( object ):
     except Exception:
       self.tables[name] = GadgetTable( os.path.join( self.dataDir, name ), bufferSize=size, dataDir=self.dataDir )
 
+    return self.tables[name]
+
   def put( self, table, key, value ):
     self.tables[table].put( str( key ), str( value ) )
 
