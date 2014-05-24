@@ -3,9 +3,12 @@ import os
 import pickle
 import threading
 import time
+import gzip
+import cStringIO
+import itertools
 from collections import namedtuple
 from mmap import mmap
-from pybloom import ScalableBloomFilter
+from pybloom import BloomFilter
 
 from .bufs.keys import pb_pb2
 
@@ -56,7 +59,7 @@ class MemoryStore( object ):
 class GadgetBox( object ):
   def __init__( self, name, size, dataDir="" ):
     self.dataDir = dataDir
-    self.filter = ScalableBloomFilter( mode=ScalableBloomFilter.SMALL_SET_GROWTH )
+    self.filter = BloomFilter( capacity=size, error_rate=0.1 )
     self.memory = None
     self.keys = None
     self.name = name
@@ -81,9 +84,9 @@ class GadgetBox( object ):
     return self
 
   def get( self, key ):
-    if( self.memory == None ):
-      self.memory = MemoryStore.fromfile( self.name, size=self.size, dataDir=self.dataDir )
-    ret = self.memory.get( key.offset, key.size )
+    with open( "%s/%s.data" % ( self.dataDir, self.name ), "rb" ) as f:
+      f.seek( key.offset )
+      ret = f.read( key.size )
 
     return ret
 
@@ -102,15 +105,23 @@ class GadgetBox( object ):
 
   def loadGadgets( self ):
     if( self.keys == None ):
+      data = cStringIO.StringIO()
       try:
         with open( os.path.join( self.dataDir, "%s.meta" % self.name ), "rb" ) as f:
-          d = f.read()
-          keyList = pb_pb2.KeyList.FromString( d )
+          for i in itertools.count():
+            d = os.read( f.fileno(), 1024 * 1024 )
+            if not d:
+              break
+            else:
+              data.write( d )
+          keyList = pb_pb2.KeyList.FromString( data.getvalue() )
           self.keys = {}
           for key in keyList.keys:
             self.keys[key.key] = key.gadget
       except IOError:
         self.keys = {}
+      finally:
+        data.close()
 
     return self.keys
       
@@ -139,7 +150,7 @@ class GadgetBoxFactory( object ):
       b, d = bloomFiles[i], dataFiles[i]
       box = GadgetBox( b.split( "." )[0].split( os.sep )[-1], bufferSize, dataDir=dataDir )
       with open( os.path.join( dataDir, b ), "rb" ) as f:
-        box.filter = ScalableBloomFilter.fromfile( f )
+        box.filter = BloomFilter.fromfile( f )
 
       factory.boxes.append( box )
 
@@ -154,6 +165,8 @@ class GadgetTable( object ):
     self.name = name
 
   def put( self, key, data ):
+    key = str( key )
+    data = str( data )
     offset = self.currentBox.put( data )
 
     if( offset < 0 ):
@@ -169,6 +182,7 @@ class GadgetTable( object ):
     self.currentBox.putGadget( key, g )
     
   def get( self, key ):
+    key = str( key )
     if( not key in self.currentBox.loadGadgets() ):
       return self._find_in_boxes( key )
     else:
@@ -181,6 +195,16 @@ class GadgetTable( object ):
     g.offset = -1
     g.size = -1
     self.currentBox.putGadget( g )
+
+  def compact( self ):
+    tempTable = GadgetTableCollection.create_temporary()
+
+    for box in self.boxes.boxes: 
+      keys = box.keys
+      for k in keys:
+        key = self.get( k )
+        if( !(key.size == -1 and key.offset == -1 ) ):
+          tempTable.put( k.key, self.get( k.key ) )
 
   def _find_in_boxes( self, key ):
     ret = None
